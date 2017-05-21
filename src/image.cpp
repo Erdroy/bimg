@@ -262,7 +262,7 @@ namespace bimg
 		return uint8_t(numMips);
 	}
 
-	uint32_t imageGetSize(TextureInfo* _info, uint16_t _width, uint16_t _height, uint16_t _depth, bool _cubeMap, bool _hasMips, uint16_t _numLayers, TextureFormat::Enum _format)
+	uint32_t imageGetSize(TextureInfo* _info, uint16_t _width, uint16_t _height, uint16_t _depth, bool _cubeMap, uint8_t _numMips, uint16_t _numLayers, TextureFormat::Enum _format)
 	{
 		const ImageBlockInfo& blockInfo = getBlockInfo(_format);
 		const uint8_t  bpp         = blockInfo.bitsPerPixel;
@@ -274,7 +274,7 @@ namespace bimg
 		_width  = bx::uint16_max(blockWidth  * minBlockX, ( (_width  + blockWidth  - 1) / blockWidth)*blockWidth);
 		_height = bx::uint16_max(blockHeight * minBlockY, ( (_height + blockHeight - 1) / blockHeight)*blockHeight);
 		_depth  = bx::uint16_max(1, _depth);
-		const uint8_t  numMips = calcNumMips(_hasMips, _width, _height, _depth);
+		const uint8_t  numMips = _numMips;
 		const uint32_t sides   = _cubeMap ? 6 : 1;
 
 		uint32_t width  = _width;
@@ -311,6 +311,12 @@ namespace bimg
 		}
 
 		return size;
+	}
+
+	uint32_t imageGetSize(TextureInfo* _info, uint16_t _width, uint16_t _height, uint16_t _depth, bool _cubeMap, bool _hasMips, uint16_t _numLayers, TextureFormat::Enum _format)
+	{
+		uint8_t mipCount = _hasMips > 0 ? calcNumMips(true, _width, _height) : 1u;
+		return imageGetSize(_info, _width, _height, _depth, _cubeMap, mipCount, _numLayers, _format);
 	}
 
 	void imageSolid(void* _dst, uint32_t _width, uint32_t _height, uint32_t _solid)

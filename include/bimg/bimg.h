@@ -239,10 +239,22 @@ namespace bimg
 		, uint16_t _height
 		, uint16_t _depth
 		, bool _cubeMap
-		, bool _hasMips
+		, uint8_t _numMips
 		, uint16_t _numLayers
 		, TextureFormat::Enum _format
 		);
+
+	/// Returns image size.
+	uint32_t imageGetSize(
+		TextureInfo* _info
+		, uint16_t _width
+		, uint16_t _height
+		, uint16_t _depth
+		, bool _cubeMap
+		, bool _hasMips
+		, uint16_t _numLayers
+		, TextureFormat::Enum _format
+	);
 
 	///
 	void imageSolid(
