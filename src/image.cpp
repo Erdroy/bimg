@@ -315,7 +315,7 @@ namespace bimg
 
 	uint32_t imageGetSize(TextureInfo* _info, uint16_t _width, uint16_t _height, uint16_t _depth, bool _cubeMap, bool _hasMips, uint16_t _numLayers, TextureFormat::Enum _format)
 	{
-		uint8_t mipCount = _hasMips > 0 ? calcNumMips(true, _width, _height) : 1u;
+		uint8_t mipCount = _hasMips ? calcNumMips(true, _width, _height) : 1u;
 		return imageGetSize(_info, _width, _height, _depth, _cubeMap, mipCount, _numLayers, _format);
 	}
 
