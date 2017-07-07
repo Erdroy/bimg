@@ -25,7 +25,7 @@
 #include <string>
 
 #define BIMG_TEXTUREC_VERSION_MAJOR 1
-#define BIMG_TEXTUREC_VERSION_MINOR 3
+#define BIMG_TEXTUREC_VERSION_MINOR 4
 
 struct Options
 {
@@ -38,6 +38,7 @@ struct Options
 		, normalMap(false)
 		, iqa(false)
 		, sdf(false)
+		, alphaTest(false)
 	{
 	}
 
@@ -69,6 +70,7 @@ struct Options
 	bool normalMap;
 	bool iqa;
 	bool sdf;
+	bool alphaTest;
 };
 
 bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData, uint32_t _inputSize, const Options& _options, bx::Error* _err)
@@ -78,7 +80,12 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 	const uint8_t* inputData = (uint8_t*)_inputData;
 
 	bimg::ImageContainer* output = NULL;
-	bimg::ImageContainer* input  = bimg::imageParse(_allocator, inputData, _inputSize);
+	bimg::ImageContainer* input  = bimg::imageParse(_allocator, inputData, _inputSize, bimg::TextureFormat::Count, _err);
+
+	if (!_err->isOk() )
+	{
+		return NULL;
+	}
 
 	if (NULL != input)
 	{
@@ -123,6 +130,10 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 			&& inputFormat == outputFormat
 			&& !needResize
 			&& (1 < input->m_numMips) == _options.mips
+			&& !_options.sdf
+			&& !_options.alphaTest
+			&& !_options.normalMap
+			&& !_options.iqa
 			;
 
 		if (needResize)
@@ -373,6 +384,18 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 						, mip.m_format
 						);
 
+					float coverage = 0.0f;
+					if (_options.alphaTest)
+					{
+						coverage = bimg::imageAlphaTestCoverage(bimg::TextureFormat::RGBA8
+							, mip.m_width
+							, mip.m_height
+							, mip.m_width*4
+							, rgba
+							, _options.edge
+							);
+					}
+
 					void* ref = NULL;
 					if (_options.iqa)
 					{
@@ -399,6 +422,18 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 							, dstMip.m_width*4
 							, rgba
 							);
+
+						if (_options.alphaTest)
+						{
+							bimg::imageScaleAlphaToCoverage(bimg::TextureFormat::RGBA8
+								, dstMip.m_width
+								, dstMip.m_height
+								, dstMip.m_width*4
+								, rgba
+								, coverage
+								, _options.edge
+								);
+						}
 
 						bimg::imageGetRawData(*output, side, lod, output->m_data, output->m_size, dstMip);
 						dstData = const_cast<uint8_t*>(dstMip.m_data);
@@ -475,28 +510,35 @@ void help(const char* _error = NULL, bool _showHelp = true)
 		);
 
 	fprintf(stderr
-		, "Usage: texturec -f <in> -o <out> [-t <format>]\n"
+		, "Usage: texturec -f <in> -o <out> [-t <texture format>]\n"
 
 		  "\n"
-		  "Supported input file types:\n"
-		  "    *.png                  Portable Network Graphics\n"
-		  "    *.tga                  Targa\n"
-		  "    *.dds                  Direct Draw Surface\n"
-		  "    *.ktx                  Khronos Texture\n"
-		  "    *.pvr                  PowerVR\n"
+		  "Supported file formats:\n"
+		  "    *.bmp (input)          Windows Bitmap.\n"
+		  "    *.dds (input, output)  Direct Draw Surface.\n"
+		  "    *.exr (input)          OpenEXR.\n"
+		  "    *.gif (input)          Graphics Interchange Format.\n"
+		  "    *.jpg (input)          JPEG Interchange Format.\n"
+		  "    *.hdr (input)          Radiance RGBE.\n"
+		  "    *.ktx (input, output)  Khronos Texture.\n"
+		  "    *.png (input)          Portable Network Graphics.\n"
+		  "    *.psd (input)          Photoshop Document.\n"
+		  "    *.pvr (input)          PowerVR.\n"
+		  "    *.tga (input)          Targa.\n"
 
 		  "\n"
 		  "Options:\n"
 		  "  -h, --help               Help.\n"
 		  "  -v, --version            Version information only.\n"
 		  "  -f <file path>           Input file path.\n"
-		  "  -o <file path>           Output file path (file will be written in KTX format).\n"
+		  "  -o <file path>           Output file path.\n"
 		  "  -t <format>              Output format type (BC1/2/3/4/5, ETC1, PVR14, etc.).\n"
 		  "  -q <quality>             Encoding quality (default, fastest, highest).\n"
 		  "  -m, --mips               Generate mip-maps.\n"
 		  "  -n, --normalmap          Input texture is normal map.\n"
 		  "      --sdf <edge>         Compute SDF texture.\n"
-		  "      --iqa                Image Quality Assesment\n"
+		  "      --ref <alpha>        Alpha reference value.\n"
+		  "      --iqa                Image Quality Assessment\n"
 		  "      --max <max size>     Maximum width/height (image will be scaled down and\n"
 		  "                           aspect ratio will be preserved.\n"
 		  "      --as <extension>     Save as.\n"
@@ -533,35 +575,36 @@ int main(int _argc, const char* _argv[])
 			, BIMG_TEXTUREC_VERSION_MINOR
 			, BIMG_API_VERSION
 			);
-		return EXIT_SUCCESS;
+		return bx::kExitSuccess;
 	}
 
 	if (cmdLine.hasArg('h', "help") )
 	{
 		help();
-		return EXIT_FAILURE;
+		return bx::kExitFailure;
 	}
 
 	const char* inputFileName = cmdLine.findOption('f');
 	if (NULL == inputFileName)
 	{
 		help("Input file must be specified.");
-		return EXIT_FAILURE;
+		return bx::kExitFailure;
 	}
 
 	const char* outputFileName = cmdLine.findOption('o');
 	if (NULL == outputFileName)
 	{
 		help("Output file must be specified.");
-		return EXIT_FAILURE;
+		return bx::kExitFailure;
 	}
 
 	const char* saveAs = cmdLine.findOption("as");
 	saveAs = NULL == saveAs ? bx::strFindI(outputFileName, ".ktx") : saveAs;
+	saveAs = NULL == saveAs ? bx::strFindI(outputFileName, ".dds") : saveAs;
 	if (NULL == saveAs)
 	{
 		help("Output file format must be specified.");
-		return EXIT_FAILURE;
+		return bx::kExitFailure;
 	}
 
 	Options options;
@@ -571,6 +614,15 @@ int main(int _argc, const char* _argv[])
 	{
 		options.sdf  = true;
 		options.edge = (float)atof(edgeOpt);
+	}
+	else
+	{
+		const char* alphaRef = cmdLine.findOption("ref");
+		if (NULL != alphaRef)
+		{
+			options.alphaTest = true;
+			options.edge      = (float)atof(alphaRef);
+		}
 	}
 
 	options.mips      = cmdLine.hasArg('m',  "mips");
@@ -592,7 +644,7 @@ int main(int _argc, const char* _argv[])
 		if (!bimg::isValid(options.format) )
 		{
 			help("Invalid format specified.");
-			return EXIT_FAILURE;
+			return bx::kExitFailure;
 		}
 	}
 
@@ -606,21 +658,26 @@ int main(int _argc, const char* _argv[])
 		case 'd': options.quality = bimg::Quality::Default; break;
 		default:
 			help("Invalid quality specified.");
-			return EXIT_FAILURE;
+			return bx::kExitFailure;
 		}
 	}
 
 	bx::Error err;
-	bx::CrtFileReader reader;
+	bx::FileReader reader;
 	if (!bx::open(&reader, inputFileName, &err) )
 	{
 		help("Failed to open input file.", err);
-		return EXIT_FAILURE;
+		return bx::kExitFailure;
 	}
 
-	bx::CrtAllocator allocator;
-
 	uint32_t inputSize = (uint32_t)bx::getSize(&reader);
+	if (0 == inputSize)
+	{
+		help("Failed to read input file.", err);
+		return bx::kExitFailure;
+	}
+
+	bx::DefaultAllocator allocator;
 	uint8_t* inputData = (uint8_t*)BX_ALLOC(&allocator, inputSize);
 
 	bx::read(&reader, inputData, inputSize, &err);
@@ -629,7 +686,7 @@ int main(int _argc, const char* _argv[])
 	if (!err.isOk() )
 	{
 		help("Failed to read input file.", err);
-		return EXIT_FAILURE;
+		return bx::kExitFailure;
 	}
 
 	bimg::ImageContainer* output = convert(&allocator, inputData, inputSize, options, &err);
@@ -638,20 +695,30 @@ int main(int _argc, const char* _argv[])
 
 	if (NULL != output)
 	{
-		bx::CrtFileWriter writer;
+		bx::FileWriter writer;
 		if (bx::open(&writer, outputFileName, false, &err) )
 		{
 			if (NULL != bx::strFindI(saveAs, "ktx") )
 			{
-				bimg::imageWriteKtx(&writer, *output, output->m_data, output->m_size);
+				bimg::imageWriteKtx(&writer, *output, output->m_data, output->m_size, &err);
+			}
+			else if (NULL != bx::strFindI(saveAs, "dds") )
+			{
+				bimg::imageWriteDds(&writer, *output, output->m_data, output->m_size, &err);
 			}
 
 			bx::close(&writer);
+
+			if (!err.isOk() )
+			{
+				help(NULL, err);
+				return bx::kExitFailure;
+			}
 		}
 		else
 		{
 			help("Failed to open output file.", err);
-			return EXIT_FAILURE;
+			return bx::kExitFailure;
 		}
 
 		bimg::imageFree(output);
@@ -659,8 +726,8 @@ int main(int _argc, const char* _argv[])
 	else
 	{
 		help(NULL, err);
-		return EXIT_FAILURE;
+		return bx::kExitFailure;
 	}
 
-	return EXIT_SUCCESS;
+	return bx::kExitSuccess;
 }

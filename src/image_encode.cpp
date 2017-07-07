@@ -135,36 +135,17 @@ namespace bimg
 		}
 	}
 
-	void imageEncodeFromRgba32f(bx::AllocatorI* _allocator, void* _dst, const void* _src, uint32_t _width, uint32_t _height, TextureFormat::Enum _format, Quality::Enum _quality, bx::Error* _err)
+	void imageEncodeFromRgba32f(bx::AllocatorI* _allocator, void* _dst, const void* _src, uint32_t _width, uint32_t _height, TextureFormat::Enum _dstFormat, Quality::Enum _quality, bx::Error* _err)
 	{
 		BX_ERROR_SCOPE(_err);
 
 		const uint8_t* src = (const uint8_t*)_src;
 
-		switch (_format)
+		if (!imageConvert(_dst, _dstFormat, _src, TextureFormat::RGBA32F, _width, _height) )
 		{
-		case TextureFormat::RGBA8:
+			uint8_t* temp = (uint8_t*)BX_ALLOC(_allocator, _width*_height*4);
+			if (imageConvert(temp, TextureFormat::RGBA8, _src, TextureFormat::RGBA32F, _width, _height) )
 			{
-				uint8_t* dst = (uint8_t*)_dst;
-				for (uint32_t yy = 0; yy < _height; ++yy)
-				{
-					for (uint32_t xx = 0; xx < _width; ++xx)
-					{
-						const uint32_t offset = yy*_width + xx;
-						const float* input = (const float*)&src[offset * 16];
-						uint8_t* output    = &dst[offset * 4];
-						output[0] = uint8_t(input[0]*255.0f + 0.5f);
-						output[1] = uint8_t(input[1]*255.0f + 0.5f);
-						output[2] = uint8_t(input[2]*255.0f + 0.5f);
-						output[3] = uint8_t(input[3]*255.0f + 0.5f);
-					}
-				}
-			}
-			break;
-
-		case TextureFormat::BC5:
-			{
-				uint8_t* temp = (uint8_t*)BX_ALLOC(_allocator, _width*_height*4);
 				for (uint32_t yy = 0; yy < _height; ++yy)
 				{
 					for (uint32_t xx = 0; xx < _width; ++xx)
@@ -172,24 +153,20 @@ namespace bimg
 						const uint32_t offset = yy*_width + xx;
 						const float* input = (const float*)&src[offset * 16];
 						uint8_t* output    = &temp[offset * 4];
-						output[0] = uint8_t(input[0]*255.0f + 0.5f);
-						output[1] = uint8_t(input[1]*255.0f + 0.5f);
-						output[2] = uint8_t(input[2]*255.0f + 0.5f);
-						output[3] = uint8_t(input[3]*255.0f + 0.5f);
+						output[0] = uint8_t(bx::fsaturate(input[0])*255.0f + 0.5f);
+						output[1] = uint8_t(bx::fsaturate(input[1])*255.0f + 0.5f);
+						output[2] = uint8_t(bx::fsaturate(input[2])*255.0f + 0.5f);
+						output[3] = uint8_t(bx::fsaturate(input[3])*255.0f + 0.5f);
 					}
 				}
 
-				imageEncodeFromRgba8(_dst, temp, _width, _height, _format, _quality);
-				BX_FREE(_allocator, temp);
+				imageEncodeFromRgba8(_dst, temp, _width, _height, _dstFormat, _quality, _err);
 			}
-			break;
-
-		default:
-			if (!imageConvert(_dst, _format, _src, TextureFormat::RGBA32F, _width, _height) )
+			else
 			{
 				BX_ERROR_SET(_err, BIMG_ERROR, "Unable to convert between input/output formats!");
 			}
-			break;
+			BX_FREE(_allocator, temp);
 		}
 	}
 
@@ -359,6 +336,117 @@ namespace bimg
 		}
 
 		return true;
+	}
+
+	static float getAlpha(UnpackFn _unpack, const void* _data)
+	{
+		float rgba[4];
+		_unpack(rgba, _data);
+		return rgba[3];
+	}
+
+	float imageAlphaTestCoverage(TextureFormat::Enum _format, uint32_t _width, uint32_t _height, uint32_t _srcPitch, const void* _src, float _alphaRef, float _scale)
+	{
+		UnpackFn unpack = getUnpack(_format);
+		if (NULL == unpack)
+		{
+			return 0.0f;
+		}
+
+		float coverage = 0.0f;
+		const uint8_t* src = (const uint8_t*)_src;
+		const uint32_t xstep = getBitsPerPixel(_format) / 8;
+		const float numSamples = 8.0f;
+
+		for (uint32_t yy = 0, ystep = _srcPitch; yy < _height-1; ++yy, src += ystep)
+		{
+			const uint8_t* data = src;
+			for (uint32_t xx = 0; xx < _width-1; ++xx, data += xstep)
+			{
+				float alpha00 = _scale * getAlpha(unpack, data);
+				float alpha10 = _scale * getAlpha(unpack, data+xstep);
+				float alpha01 = _scale * getAlpha(unpack, data+ystep);
+				float alpha11 = _scale * getAlpha(unpack, data+ystep+xstep);
+
+				for (float fy = 0.5f/numSamples; fy < 1.0f; fy += 1.0f)
+				{
+					for (float fx = 0.5f/numSamples; fx < 1.0f; fx += 1.0f)
+					{
+						float alpha = 0.0f
+							+ alpha00 * (1.0f - fx) * (1.0f - fy)
+							+ alpha10 * (       fx) * (1.0f - fy)
+							+ alpha01 * (1.0f - fx) * (       fy)
+							+ alpha11 * (       fx) * (       fy)
+							;
+
+						if (alpha > _alphaRef)
+						{
+							coverage += 1.0f;
+						}
+					}
+				}
+			}
+		}
+
+		return coverage / float(_width*_height*numSamples*numSamples);
+	}
+
+	void imageScaleAlphaToCoverage(TextureFormat::Enum _format, uint32_t _width, uint32_t _height, uint32_t _srcPitch, void* _src, float _desiredCoverage, float _alphaRef)
+	{
+		PackFn   pack   = getPack(_format);
+		UnpackFn unpack = getUnpack(_format);
+		if (NULL == pack
+		||  NULL == unpack)
+		{
+			return;
+		}
+
+		float min   = 0.0f;
+		float max   = 4.0f;
+		float scale = 1.0f;
+
+		for (uint32_t ii = 0; ii < 8; ++ii)
+		{
+			float coverage = imageAlphaTestCoverage(
+				  _format
+				, _width
+				, _height
+				, _srcPitch
+				, _src
+				, _alphaRef
+				, scale
+				);
+
+			if (coverage < _desiredCoverage)
+			{
+				min = scale;
+			}
+			else if (coverage > _desiredCoverage)
+			{
+				max = scale;
+			}
+			else
+			{
+				break;
+			}
+
+			scale = (min + max) * 0.5f;
+		}
+
+		uint8_t* src = (uint8_t*)_src;
+		const uint32_t xstep = getBitsPerPixel(_format) / 8;
+
+		for (uint32_t yy = 0, ystep = _srcPitch; yy < _height; ++yy, src += ystep)
+		{
+			uint8_t* data = src;
+			for (uint32_t xx = 0; xx < _width; ++xx, data += xstep)
+			{
+				float rgba[4];
+				unpack(rgba, data);
+				rgba[3] = bx::fsaturate(rgba[3]*scale);
+				pack(data, rgba);
+			}
+		}
 	}
 
 } // namespace bimg
