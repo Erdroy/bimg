@@ -7,6 +7,7 @@
 #include <bx/allocator.h>
 #include <bx/readerwriter.h>
 #include <bx/endian.h>
+#include <bx/math.h>
 
 #include <bimg/decode.h>
 #include <bimg/encode.h>
@@ -19,13 +20,13 @@
 
 #include <bx/bx.h>
 #include <bx/commandline.h>
-#include <bx/crtimpl.h>
+#include <bx/file.h>
 #include <bx/uint32_t.h>
 
 #include <string>
 
 #define BIMG_TEXTUREC_VERSION_MAJOR 1
-#define BIMG_TEXTUREC_VERSION_MINOR 4
+#define BIMG_TEXTUREC_VERSION_MINOR 10
 
 struct Options
 {
@@ -72,6 +73,26 @@ struct Options
 	bool sdf;
 	bool alphaTest;
 };
+
+void imageRgba32fNormalize(void* _dst, uint32_t _width, uint32_t _height, uint32_t _srcPitch, const void* _src)
+{
+	const uint8_t* src = (const uint8_t*)_src;
+	uint8_t* dst = (uint8_t*)_dst;
+
+	for (uint32_t yy = 0, ystep = _srcPitch; yy < _height; ++yy, src += ystep)
+	{
+		const float* rgba = (const float*)&src[0];
+		for (uint32_t xx = 0; xx < _width; ++xx, rgba += 4, dst += 16)
+		{
+			float xyz[3];
+
+			xyz[0]  = rgba[0];
+			xyz[1]  = rgba[1];
+			xyz[2]  = rgba[2];
+			bx::vec3Norm( (float*)dst, xyz);
+		}
+	}
+}
 
 bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData, uint32_t _inputSize, const Options& _options, bx::Error* _err)
 {
@@ -213,6 +234,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 						, mip.m_data
 						, dstMip.m_width
 						, dstMip.m_height
+						, dstMip.m_depth
 						, dstMip.m_width*16
 						, mip.m_format
 						);
@@ -233,9 +255,17 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 						}
 					}
 
+					imageRgba32fNormalize(rgba
+						, dstMip.m_width
+						, dstMip.m_height
+						, dstMip.m_width*16
+						, rgba
+						);
+
 					bimg::imageRgba32f11to01(rgbaDst
 						, dstMip.m_width
 						, dstMip.m_height
+						, dstMip.m_depth
 						, dstMip.m_width*16
 						, rgba
 						);
@@ -245,6 +275,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 						, rgbaDst
 						, dstMip.m_width
 						, dstMip.m_height
+						, dstMip.m_depth
 						, outputFormat
 						, _options.quality
 						, _err
@@ -262,6 +293,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 						bimg::imageRgba32f11to01(rgbaDst
 							, dstMip.m_width
 							, dstMip.m_height
+							, dstMip.m_depth
 							, dstMip.m_width*16
 							, rgba
 							);
@@ -274,6 +306,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 							, rgbaDst
 							, dstMip.m_width
 							, dstMip.m_height
+							, dstMip.m_depth
 							, outputFormat
 							, _options.quality
 							, _err
@@ -282,14 +315,16 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 
 					BX_FREE(_allocator, rgbaDst);
 				}
-				else if (!bimg::isCompressed(input->m_format)
-					 &&  8 != inputBlockInfo.rBits)
+				else if ( (!bimg::isCompressed(input->m_format) && 8 != inputBlockInfo.rBits)
+					 || outputFormat == bimg::TextureFormat::BC6H
+					 || outputFormat == bimg::TextureFormat::BC7
+						)
 				{
 					uint32_t size = bimg::imageGetSize(
 						  NULL
 						, uint16_t(dstMip.m_width)
 						, uint16_t(dstMip.m_height)
-						, 0
+						, uint16_t(dstMip.m_depth)
 						, false
 						, false
 						, 1
@@ -304,6 +339,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 						, mip.m_data
 						, mip.m_width
 						, mip.m_height
+						, mip.m_depth
 						, mip.m_width*16
 						, mip.m_format
 						);
@@ -313,6 +349,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 						, rgba32f
 						, dstMip.m_width
 						, dstMip.m_height
+						, dstMip.m_depth
 						, outputFormat
 						, _options.quality
 						, _err
@@ -324,6 +361,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 						bimg::imageRgba32fToLinear(rgba32f
 							, mip.m_width
 							, mip.m_height
+							, mip.m_depth
 							, mip.m_width*16
 							, rgba32f
 							);
@@ -333,6 +371,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 							bimg::imageRgba32fLinearDownsample2x2(rgba32f
 								, dstMip.m_width
 								, dstMip.m_height
+								, dstMip.m_depth
 								, dstMip.m_width*16
 								, rgba32f
 								);
@@ -343,6 +382,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 							bimg::imageRgba32fToGamma(rgbaDst
 								, mip.m_width
 								, mip.m_height
+								, mip.m_depth
 								, mip.m_width*16
 								, rgba32f
 								);
@@ -352,6 +392,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 								, rgbaDst
 								, dstMip.m_width
 								, dstMip.m_height
+								, dstMip.m_depth
 								, outputFormat
 								, _options.quality
 								, _err
@@ -367,7 +408,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 						  NULL
 						, uint16_t(dstMip.m_width)
 						, uint16_t(dstMip.m_height)
-						, 0
+						, uint16_t(dstMip.m_depth)
 						, false
 						, false
 						, 1
@@ -409,6 +450,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 						, rgba
 						, dstMip.m_width
 						, dstMip.m_height
+						, dstMip.m_depth
 						, outputFormat
 						, _options.quality
 						, _err
@@ -419,6 +461,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 						bimg::imageRgba8Downsample2x2(rgba
 							, dstMip.m_width
 							, dstMip.m_height
+							, dstMip.m_depth
 							, dstMip.m_width*4
 							, rgba
 							);
@@ -442,6 +485,7 @@ bimg::ImageContainer* convert(bx::AllocatorI* _allocator, const void* _inputData
 							, rgba
 							, dstMip.m_width
 							, dstMip.m_height
+							, dstMip.m_depth
 							, outputFormat
 							, _options.quality
 							, _err
@@ -542,6 +586,7 @@ void help(const char* _error = NULL, bool _showHelp = true)
 		  "      --max <max size>     Maximum width/height (image will be scaled down and\n"
 		  "                           aspect ratio will be preserved.\n"
 		  "      --as <extension>     Save as.\n"
+		  "      --validate           *DEBUG* Validate that output image produced matches after loading.\n"
 
 		  "\n"
 		  "For additional information, see https://github.com/bkaradzic/bgfx\n"
@@ -662,6 +707,8 @@ int main(int _argc, const char* _argv[])
 		}
 	}
 
+	const bool validate = cmdLine.hasArg("validate");
+
 	bx::Error err;
 	bx::FileReader reader;
 	if (!bx::open(&reader, inputFileName, &err) )
@@ -719,6 +766,83 @@ int main(int _argc, const char* _argv[])
 		{
 			help("Failed to open output file.", err);
 			return bx::kExitFailure;
+		}
+
+		if (validate)
+		{
+			if (!bx::open(&reader, outputFileName, &err) )
+			{
+				help("Failed to validate file.", err);
+				return bx::kExitFailure;
+			}
+
+			inputSize = (uint32_t)bx::getSize(&reader);
+			if (0 == inputSize)
+			{
+				help("Failed to validate file.", err);
+				return bx::kExitFailure;
+			}
+
+			inputData = (uint8_t*)BX_ALLOC(&allocator, inputSize);
+			bx::read(&reader, inputData, inputSize, &err);
+			bx::close(&reader);
+
+			bimg::ImageContainer* input = bimg::imageParse(&allocator, inputData, inputSize, bimg::TextureFormat::Count, &err);
+			if (!err.isOk() )
+			{
+				help("Failed to validate file.", err);
+				return bx::kExitFailure;
+			}
+
+			if (false
+			||  input->m_format    != output->m_format
+			||  input->m_size      != output->m_size
+			||  input->m_width     != output->m_width
+			||  input->m_height    != output->m_height
+			||  input->m_depth     != output->m_depth
+			||  input->m_numLayers != output->m_numLayers
+			||  input->m_numMips   != output->m_numMips
+			||  input->m_hasAlpha  != output->m_hasAlpha
+			||  input->m_cubeMap   != output->m_cubeMap
+			   )
+			{
+				help("Validation failed, image headers are different.");
+				return bx::kExitFailure;
+			}
+
+			{
+				const uint8_t  numMips  = output->m_numMips;
+				const uint16_t numSides = output->m_numLayers * (output->m_cubeMap ? 6 : 1);
+
+				for (uint8_t lod = 0; lod < numMips; ++lod)
+				{
+					for (uint16_t side = 0; side < numSides; ++side)
+					{
+						bimg::ImageMip srcMip;
+						bool hasSrc = bimg::imageGetRawData(*input, side, lod, input->m_data, input->m_size, srcMip);
+
+						bimg::ImageMip dstMip;
+						bool hasDst = bimg::imageGetRawData(*output, side, lod, output->m_data, output->m_size, dstMip);
+
+						if (false
+						||  hasSrc        != hasDst
+						||  srcMip.m_size != dstMip.m_size
+						   )
+						{
+							help("Validation failed, image mip/layer/side are different.");
+							return bx::kExitFailure;
+						}
+
+						if (0 != bx::memCmp(srcMip.m_data, dstMip.m_data, srcMip.m_size) )
+						{
+							help("Validation failed, image content are different.");
+							return bx::kExitFailure;
+						}
+					}
+				}
+			}
+
+			BX_FREE(&allocator, inputData);
 		}
 
 		bimg::imageFree(output);
